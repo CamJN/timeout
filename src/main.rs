@@ -1,25 +1,38 @@
+use std::env::args_os;
+use std::os::unix::process::ExitStatusExt;
 use std::time::Duration;
-use std::process::Command;
-use futures::Future;
+use std::process::{Command,exit};
 use tokio::timer::Timeout;
 use tokio_process::CommandExt;
-use std::io::{stdout, Write};
+use futures::future::Future;
 
 const TIMEOUT: u64 = 5;
 
 fn main() {
-    let unlocked_stdout = stdout();
-    let mut stdout = unlocked_stdout.lock();
-    let mut args = std::env::args_os();
-    // 0th arg is path to self
-    assert!(args.len() > 1, "Arguments needed");
+    let default = "Failed to get panic message.";
+    std::panic::set_hook(Box::new(move |p| {
+        eprintln!("{}", p.payload().downcast_ref().unwrap_or(&default));
+        std::process::exit(-1);
+    }));
 
-    let command = args.next().unwrap();
-    let output = Command::new(command).args(args).output_async();
+    // first arg is path to self
+    let mut args = args_os().skip(1);
+    let mut command = args.next().expect("Arguments needed");
 
-    let future = output
-        .map_err(|e| panic!("failed to collect output: {}", e))
-        .map(|output| stdout.write(&output.stdout));
+    let limit = match command.as_os_str().to_str().map(str::parse) {
+        Some(Ok(num)) => {
+            command = args.next().expect("Command needed after timeout");
+            num
+        },
+        _ => TIMEOUT
+    };
 
-    let _ =  Timeout::new(future, Duration::from_secs(TIMEOUT));
+    let child = Command::new(command).args(args).spawn_async().expect("Failed to spawn").map(|status|if !status.success() {
+        match status.code() {
+            Some(code) => exit(code),
+            None       => panic!("Process terminated by signal {}",status.signal().unwrap())
+        }
+    });
+    let timeout = Timeout::new(child, Duration::from_secs(limit)).map_err(|_|panic!("Command timed out"));
+    tokio::run(timeout);
 }
