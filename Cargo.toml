@@ -7,4 +7,4 @@ edition = "2018"
 [dependencies]
 tokio-process = "0.2.3"
 futures = "0.1.25"
-tokio = "0.1.14"
+tokio = "1.18.5"
